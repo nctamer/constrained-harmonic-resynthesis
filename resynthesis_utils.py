@@ -14,8 +14,7 @@ sms_tools_path = 'sms-tools' # if you use git clone to this dir (e.g. in colab)
 # change according to the install location of https://github.com/MTG/sms-tools
 
 
-sys.path.append(os.path.join(sms_tools_path, 'software', 'models', './sineModel/'))
-sys.path.append(os.path.join(sms_tools_path, 'software', 'models', './harmonicModel/'))
+sys.path.append(os.path.join(sms_tools_path, 'software', './models/'))
 #import models.sineModel as SM
 try:
     import sineModel as SM
