@@ -1,0 +1,183 @@
+import numpy as np
+import os
+from time import time as taymit
+from joblib import Parallel, delayed
+import glob
+import pickle
+from sklearn.covariance import EllipticEnvelope
+from constrained_harmonic_resynthesis import analyze_file, synth_file
+
+
+def gen_paths(main_path, modeln, suffix, pitch_shift=False, use_anal_paths=False):
+    # TODO: glob enable nested folders, mp3 and wav all possibilities
+    originals = sorted(glob.glob(os.path.join(main_path, 'original', '*', '*', '*.mp3')))
+    paths = []
+    for i, original in enumerate(originals):
+        split = original.split('/')
+        resynth_folder = '/'.join(split[:-4] + ['resynth', suffix] + split[-3:-1])
+        tfrecord_folder = '/'.join(split[:-4] + ['tfrecord', suffix] + split[-3:-1])
+        if not os.path.exists(resynth_folder):
+            os.makedirs(resynth_folder)
+        if not os.path.exists(tfrecord_folder):
+            os.makedirs(tfrecord_folder)
+        p = {
+            'original': original,
+            'f0': '/'.join(split[:-4] + ['f0s', modeln] + split[-3:]).rsplit('.',maxsplit=1)[0] + '.f0.csv',
+            'synth': '/'.join(split[:-4] + ['resynth', suffix] + split[-3:]).rsplit('.',maxsplit=1)[0] + '.RESYN.wav',
+            'synth_f0': '/'.join(split[:-4] + ['resynth', suffix] +
+                                 split[-3:]).rsplit('.', maxsplit=1)[0] + '.RESYN.csv',
+            'synth_tfrecord': '/'.join(split[:-4] + ['tfrecord', suffix] +
+                                       split[-3:]).rsplit('.', maxsplit=1)[0] + '.RESYN.tfrecord'
+        }
+        if use_anal_paths:
+            anal_folder = '/'.join(split[:-4] + ['anal', modeln] + split[-3:-1])
+            if not os.path.exists(anal_folder):
+                os.makedirs(anal_folder)
+            p['anal'] = '/'.join(split[:-4] + ['anal', modeln] + split[-3:]).rsplit('.',maxsplit=1)[0] + '.npz'
+        if pitch_shift:
+            p['shifted'] = '/'.join(split[:-4] + ['resynth', suffix] + split[-3:]).rsplit('.',maxsplit=1)[0] + \
+                           '.shiftedRESYN.wav'
+            p['shifted_f0'] = '/'.join(split[:-4] + ['resynth', suffix] + split[-3:]).rsplit('.', maxsplit=1)[0] +\
+                              '.shiftedRESYN.csv'
+            p['shifted_tfrecord'] = '/'.join(split[:-4] + ['tfrecord', suffix] +
+                                    split[-3:]).rsplit('.', maxsplit=1)[0] + '.shiftedRESYN.tfrecord'
+        paths.append(p)
+    return paths
+
+
+def chr_dataset(dataset_folder=os.path.join(os.path.expanduser("~"), "FluteEtudes"),
+                model="finetuned_instrument_model_100_005",
+                iteration_if_applicable=0,  # do not use if starting from the original model,
+                hcc=True,  # whether to use harmonic consistency constraint (HCC)
+                ic=True,  # whether to use instrument-modeling constraint (IC). if not, only use HCC.
+                ic_new_model=True,  # whether to estimate a new instrument model.
+                # only applicable if ic=True. if false, use the stored instrument model
+                ic_use_existing_anal_files=False,  # if we have stored the harmonic analysis output, use them for ic.
+                low_confidence_threshold=0.3,
+                high_confidence_threshold=0.7,
+                min_voiced_th_ms=50,
+                synthesize_pitch_shifted_versions=True,
+                use_sawtooth_timbre=False,
+                n_parallel_jobs=16):
+    """
+    Apply Constrained Harmonic Resynthesis (one iteration of silencing) to a monophonic single instrument dataset with
+    automatically extracted pitch labels. 1) apply a filtering based on confidences given by the pitch tracker.
+    The relevant parameters for this step are low_confidence_threshold, high_confidence_threshold, and min_voiced_th_ms.
+    2) silence pitch tracks with anomalous harmonics for this specific instrument. The relevant parameters are ic(_xxx)
+    3) apply harmonic consistency constraints with two-way mismatch procedure, and set the harmonics at exact multiples.
+    The algorithm will retain the folder structure and the naming conventions of the original dataset, and output
+    resynthesized and tfrecord versions (for re-training crepe).
+    (.wav) and f0 (.f0.csv) files.
+    :param dataset_folder: the main folder of the unlabeled monophonic, single instrument dataset. It should have the
+    subfolders 1)original: where the original .mp3 or .wav files are stored, and 2)f0s/model: where the f0 tracks (.csv)
+    extracted with the specified model are stored.
+    :param model: a given name for the extracted f0s path (e.g., crepe, tape, finetuned_iter2 etc.
+    :param iteration_if_applicable: If n, save the data with n+1 namings.
+    :param hcc: Harmonic consistency constraint. default=True
+    :param ic: Instrument-modeling constraint. default=True
+    :param ic_new_model: Generate new instrument model (elliptic envelope anomaly detector) from data. default=True
+    :param ic_use_existing_anal_files: default=False. In case of pre-computed analysis files, use them.
+    :param low_confidence_threshold: default 0.3 in (0-1) -> remove pitch estimates with confidences below the low threshold
+    :param high_confidence_threshold: default 0.7 in (0,1) -> accept pitch estimates with very high confidence
+    :param min_voiced_th_ms: for in-between values, apply a median filter guided by confidences
+    :param synthesize_pitch_shifted_versions: pitch shifted versions make the data less vulnerable to the auto-tuning ef
+    :param use_sawtooth_timbre: use same harmonic structure as an ablation study
+    :param n_parallel_jobs: SMS takes very long to run!! Use parallelization!
+    :return: write folders synth and tfrecord (also microtonal pitch shifted versions)
+    """
+
+    refine_estimates_with_twm = hcc  # the descriptive old name for Harmonic Consistency Constraint
+
+    if ic:  # use instrument-modeling constraint
+        num_filters = 100
+        contamination = 0.05
+        name_suffix = "_ic_" + str(num_filters) + '_' + str(contamination)
+    else:  # only use harmonic consistency constraint
+        instrument_timbre_detector = None
+        name_suffix = "_standard"
+    if use_sawtooth_timbre:
+        name_suffix = name_suffix + "_sawtooth"
+    if iteration_if_applicable:
+        name_suffix = name_suffix + "_iter" + str(iteration_if_applicable)
+    name_suffix = name_suffix + "_" + model
+
+    if ic and ic_new_model:  # create paths for the analysis files (SMS tools is slow, don't estimate it every run)
+        use_anal_paths = True
+    else:
+        use_anal_paths = False
+
+    paths_list = gen_paths(dataset_folder, modeln=model, suffix=name_suffix, pitch_shift=synthesize_pitch_shifted_versions,
+                           use_anal_paths=use_anal_paths)
+    if ic:
+        # Instrument model is used for the standard implementation, below is the code to create the
+        # instrument timbre model
+        if ic_new_model:
+            print("started instrument model estimation")
+            # combine instrument model estimation with the synthesis. The analysis for the instrument estimation takes
+            # a long while, so only do it when really needed!
+            if not ic_use_existing_anal_files:
+                Parallel(n_jobs=n_parallel_jobs)(delayed(analyze_file)(
+                    paths_dict, pitch_shift=synthesize_pitch_shifted_versions,
+                    confidence_threshold=0.9) for paths_dict in paths_list)
+
+            data, pitch_content = [], []
+            for paths_dict in paths_list:
+                file_content = np.load(paths_dict['anal'])
+                data.append(file_content['hmag'])
+                pitch_content.append(file_content['f0'])
+
+            data = np.vstack(data)
+            pitch_content = np.hstack(pitch_content)
+            order = pitch_content.argsort()
+            pitch_content = pitch_content[order]
+            data = data[order]
+            data = data - data[:, 0][:, np.newaxis]
+
+            mids = np.linspace(pitch_content[10], pitch_content[-11], num_filters + 2)  # not directly the max
+            mids[0] = pitch_content[0]         # a quick fix for outliers, to make sure that we do not focus
+            mids[-1] = pitch_content[-1]       # on some arbitrary big or small pitch estimate
+            instrument_timbre_detectors = {}
+            print('range:', min(mids), max(mids))
+            for n in range(1, num_filters + 1):
+                mid = mids[n]
+                start = mids[n-1]
+                end = mids[n+1]
+                relevant = np.logical_and(pitch_content > start, pitch_content < end)
+                relevant_data = data[relevant]
+                if len(relevant_data>10):
+                    instrument_timbre_detector = EllipticEnvelope(contamination=contamination).fit(relevant_data[:, 1:])
+                    instrument_timbre_detectors[mid] = instrument_timbre_detector
+                    print(mid, n, start, end, len(relevant_data))
+                    print(np.array2string(instrument_timbre_detector.location_, precision=2))
+                else:
+                    print('not enough samples to generate instrument model in the range:', start, end)
+                    print('skipping')
+
+            pitch_bins = mids[1:-2]
+            pitch_hist, _ = np.histogram(pitch_content, bins=pitch_bins)
+            pitch_dist = pitch_hist / len(data)
+
+            print("Pitch distribution for the instrument model:")
+            for f, p in zip(pitch_bins, pitch_dist):
+                print("%4d" % f, "*" * int(p * 100))
+
+            with open(os.path.join(dataset_folder, 'ic_' + str(num_filters) + '_' +
+                                                   str(contamination) + '.pkl'), 'wb') as outp:
+                pickle.dump(instrument_timbre_detectors, outp, pickle.HIGHEST_PROTOCOL)
+            print("FINISHED INSTRUMENT MODEL ESTIMATION!!! \n\n\n\n\n\n\n\n NOW THE SYNTHESIS STARTS!!!")
+
+        instrument_model_file = os.path.join(dataset_folder, 'ic_' + str(num_filters) + '_' +
+                                             str(contamination) + '.pkl')
+        with open(instrument_model_file, 'rb') as modelfile:
+            instrument_timbre_detector = pickle.load(modelfile)
+
+    time_grade = taymit()
+    Parallel(n_jobs=n_parallel_jobs)(delayed(synth_file)(
+        paths_dict, pitch_shift=synthesize_pitch_shifted_versions,
+        instrument_detector=instrument_timbre_detector,
+        th_lc=low_confidence_threshold, th_hc=high_confidence_threshold, voiced_th_ms=min_voiced_th_ms,
+        refine_twm=refine_estimates_with_twm, sawtooth_synth=use_sawtooth_timbre) for paths_dict in paths_list)
+
+    time_grade = taymit() - time_grade
+    print("It took {:.3f}".format(time_grade))
+
