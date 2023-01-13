@@ -7,10 +7,11 @@ import pickle
 from sklearn.covariance import EllipticEnvelope
 from constrained_harmonic_resynthesis import analyze_file, synth_file
 
+AUDIO_FORMAT = ".mp3"
 
 def gen_paths(main_path, modeln, suffix, pitch_shift=False, use_anal_paths=False):
     # TODO: glob enable nested folders, mp3 and wav all possibilities
-    originals = sorted(glob.glob(os.path.join(main_path, 'original', '*', '*', '*.mp3')))
+    originals = sorted(glob.glob(os.path.join(main_path, 'original', '*', '*', '*' + AUDIO_FORMAT)))
     paths = []
     for i, original in enumerate(originals):
         split = original.split('/')
@@ -181,3 +182,7 @@ def chr_dataset(dataset_folder=os.path.join(os.path.expanduser("~"), "FluteEtude
     time_grade = taymit() - time_grade
     print("It took {:.3f}".format(time_grade))
 
+
+if __name__ == '__main__':
+    dataset_folder = "/run/user/1000/gvfs/sftp:host=hpc.s.upf.edu/homedtic/ntamer/musical-etudes/clarinet-etudes"
+    chr_dataset
