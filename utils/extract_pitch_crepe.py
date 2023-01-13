@@ -116,5 +116,5 @@ def extract_pitch_crepe(main_dataset_folder, viterbi=True):
 
 if __name__ == '__main__':
     #dataset_folder = "/run/user/1000/gvfs/sftp:host=hpc.s.upf.edu/homedtic/ntamer/musical-etudes/clarinet-etudes"
-    dataset_folder = "/homedtic/ntamer/musical-etudes/clarinet-etudes"
+    dataset_folder = "/homedtic/ntamer/musical-etudes/flute-etudes"
     extract_pitch_crepe(dataset_folder, viterbi=True)

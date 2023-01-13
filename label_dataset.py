@@ -7,41 +7,36 @@ import pickle
 from sklearn.covariance import EllipticEnvelope
 from constrained_harmonic_resynthesis import analyze_file, synth_file
 
-AUDIO_FORMAT = ".mp3"
 
 def gen_paths(main_path, modeln, suffix, pitch_shift=False, use_anal_paths=False):
     # TODO: glob enable nested folders, mp3 and wav all possibilities
-    originals = sorted(glob.glob(os.path.join(main_path, 'original', '*', '*', '*' + AUDIO_FORMAT)))
+    originals = sorted(glob.glob(os.path.join(main_path, 'original', '**')))
     paths = []
     for i, original in enumerate(originals):
-        split = original.split('/')
-        resynth_folder = '/'.join(split[:-4] + ['resynth', suffix] + split[-3:-1])
-        tfrecord_folder = '/'.join(split[:-4] + ['tfrecord', suffix] + split[-3:-1])
-        if not os.path.exists(resynth_folder):
-            os.makedirs(resynth_folder)
-        if not os.path.exists(tfrecord_folder):
-            os.makedirs(tfrecord_folder)
+        name = os.path.relpath(original, os.path.join(main_path, "original"))[:-4]
+        f0 = os.path.join(main_path, 'pitch_tracks', modeln, name + '.f0.csv')
+        resynth_path = os.path.join(main_path, 'resynth', suffix, name)
+        tfrecord_path = os.path.join(main_path, 'tfrecord', suffix, name)
+        if not os.path.exists(os.path.dirname(resynth_path)):
+            os.makedirs(os.path.dirname(resynth_path))
+        if not os.path.exists(os.path.dirname(tfrecord_path)):
+            os.makedirs(os.path.dirname(tfrecord_path))
         p = {
             'original': original,
-            'f0': '/'.join(split[:-4] + ['f0s', modeln] + split[-3:]).rsplit('.',maxsplit=1)[0] + '.f0.csv',
-            'synth': '/'.join(split[:-4] + ['resynth', suffix] + split[-3:]).rsplit('.',maxsplit=1)[0] + '.RESYN.wav',
-            'synth_f0': '/'.join(split[:-4] + ['resynth', suffix] +
-                                 split[-3:]).rsplit('.', maxsplit=1)[0] + '.RESYN.csv',
-            'synth_tfrecord': '/'.join(split[:-4] + ['tfrecord', suffix] +
-                                       split[-3:]).rsplit('.', maxsplit=1)[0] + '.RESYN.tfrecord'
+            'f0': f0,
+            'synth': resynth_path + '.RESYN.wav',
+            'synth_f0': resynth_path + '.RESYN.csv',
+            'synth_tfrecord': tfrecord_path + '.RESYN.tfrecord'
         }
         if use_anal_paths:
-            anal_folder = '/'.join(split[:-4] + ['anal', modeln] + split[-3:-1])
-            if not os.path.exists(anal_folder):
-                os.makedirs(anal_folder)
-            p['anal'] = '/'.join(split[:-4] + ['anal', modeln] + split[-3:]).rsplit('.',maxsplit=1)[0] + '.npz'
+            anal_path = os.path.join(main_path, 'anal', modeln, name + '.npz')
+            if not os.path.exists(os.path.dirname(anal_path)):
+                os.makedirs(os.path.dirname(anal_path))
+            p['anal'] = anal_path
         if pitch_shift:
-            p['shifted'] = '/'.join(split[:-4] + ['resynth', suffix] + split[-3:]).rsplit('.',maxsplit=1)[0] + \
-                           '.shiftedRESYN.wav'
-            p['shifted_f0'] = '/'.join(split[:-4] + ['resynth', suffix] + split[-3:]).rsplit('.', maxsplit=1)[0] +\
-                              '.shiftedRESYN.csv'
-            p['shifted_tfrecord'] = '/'.join(split[:-4] + ['tfrecord', suffix] +
-                                    split[-3:]).rsplit('.', maxsplit=1)[0] + '.shiftedRESYN.tfrecord'
+            p['shifted'] = resynth_path + '.shiftedRESYN.wav'
+            p['shifted_f0'] = resynth_path + '.shiftedRESYN.csv'
+            p['shifted_tfrecord'] = tfrecord_path + '.shiftedRESYN.tfrecord'
         paths.append(p)
     return paths
 
@@ -92,12 +87,12 @@ def chr_dataset(dataset_folder=os.path.join(os.path.expanduser("~"), "FluteEtude
     if ic:  # use instrument-modeling constraint
         num_filters = 100
         contamination = 0.05
-        name_suffix = "_ic_" + str(num_filters) + '_' + str(contamination)
+        name_suffix = "ic_" + str(num_filters) + '_' + str(contamination)
     else:  # only use harmonic consistency constraint
         instrument_timbre_detector = None
-        name_suffix = "_standard"
+        name_suffix = "standard"
     if use_sawtooth_timbre:
-        name_suffix = name_suffix + "_sawtooth"
+        name_suffix = name_suffix + "sawtooth"
     if iteration_if_applicable:
         name_suffix = name_suffix + "_iter" + str(iteration_if_applicable)
     name_suffix = name_suffix + "_" + model
@@ -185,4 +180,4 @@ def chr_dataset(dataset_folder=os.path.join(os.path.expanduser("~"), "FluteEtude
 
 if __name__ == '__main__':
     dataset_folder = "/run/user/1000/gvfs/sftp:host=hpc.s.upf.edu/homedtic/ntamer/musical-etudes/clarinet-etudes"
-    chr_dataset
+    chr_dataset(dataset_folder, model="crepe", ic=False, synthesize_pitch_shifted_versions=True)
