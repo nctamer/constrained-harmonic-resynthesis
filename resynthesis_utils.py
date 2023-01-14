@@ -10,12 +10,10 @@ SAMPLING_RATE = 44100
 WINDOW_SIZE = 1025  # int(2*(((1024/16000)*SAMPLING_RATE)//2))-1
 WINDOW_TYPE = 'blackmanharris'
 
-sms_tools_path = 'sms-tools' # if you use git clone to this dir (e.g. in colab)
+sms_tools_path = 'sms_tools'  # if you use git clone to this dir (e.g. in colab)
 # change according to the install location of https://github.com/MTG/sms-tools
 
-
-sys.path.append(os.path.join(sms_tools_path, 'software', './models/'))
-#import models.sineModel as SM
+sys.path.append(os.path.join(sms_tools_path, './models/'))
 try:
     import sineModel as SM
     import harmonicModel as HM

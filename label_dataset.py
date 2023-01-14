@@ -6,9 +6,10 @@ import glob
 import pickle
 from sklearn.covariance import EllipticEnvelope
 from constrained_harmonic_resynthesis import analyze_file, synth_file
+import argparse
 
 
-def gen_paths(main_path, modeln, suffix, pitch_shift=False, use_anal_paths=False):
+def gen_paths(main_path, modeln, suffix, pitch_shift=False, use_anal_paths=False, create_tfrecords=False):
     # TODO: glob enable nested folders, mp3 and wav all possibilities
     originals = sorted(glob.glob(os.path.join(main_path, 'original', '**')))
     paths = []
@@ -16,27 +17,30 @@ def gen_paths(main_path, modeln, suffix, pitch_shift=False, use_anal_paths=False
         name = os.path.relpath(original, os.path.join(main_path, "original"))[:-4]
         f0 = os.path.join(main_path, 'pitch_tracks', modeln, name + '.f0.csv')
         resynth_path = os.path.join(main_path, 'resynth', suffix, name)
-        tfrecord_path = os.path.join(main_path, 'tfrecord', suffix, name)
         if not os.path.exists(os.path.dirname(resynth_path)):
             os.makedirs(os.path.dirname(resynth_path))
-        if not os.path.exists(os.path.dirname(tfrecord_path)):
-            os.makedirs(os.path.dirname(tfrecord_path))
         p = {
             'original': original,
             'f0': f0,
             'synth': resynth_path + '.RESYN.wav',
-            'synth_f0': resynth_path + '.RESYN.csv',
-            'synth_tfrecord': tfrecord_path + '.RESYN.tfrecord'
+            'synth_f0': resynth_path + '.RESYN.csv'
         }
+        if pitch_shift:
+            p['shifted'] = resynth_path + '.shiftedRESYN.wav'
+            p['shifted_f0'] = resynth_path + '.shiftedRESYN.csv'
+
+        if create_tfrecords:
+            tfrecord_path = os.path.join(main_path, 'tfrecord', suffix, name)
+            if not os.path.exists(os.path.dirname(tfrecord_path)):
+                os.makedirs(os.path.dirname(tfrecord_path))
+            p["synth_tfrecord"] = tfrecord_path + '.RESYN.tfrecord'
+            if pitch_shift:
+                p['shifted_tfrecord'] = tfrecord_path + '.shiftedRESYN.tfrecord'
         if use_anal_paths:
             anal_path = os.path.join(main_path, 'anal', modeln, name + '.npz')
             if not os.path.exists(os.path.dirname(anal_path)):
                 os.makedirs(os.path.dirname(anal_path))
             p['anal'] = anal_path
-        if pitch_shift:
-            p['shifted'] = resynth_path + '.shiftedRESYN.wav'
-            p['shifted_f0'] = resynth_path + '.shiftedRESYN.csv'
-            p['shifted_tfrecord'] = tfrecord_path + '.shiftedRESYN.tfrecord'
         paths.append(p)
     return paths
 
@@ -54,6 +58,7 @@ def chr_dataset(dataset_folder=os.path.join(os.path.expanduser("~"), "FluteEtude
                 min_voiced_th_ms=50,
                 synthesize_pitch_shifted_versions=True,
                 use_sawtooth_timbre=False,
+                create_tfrecords=False,
                 n_parallel_jobs=16):
     """
     Apply Constrained Harmonic Resynthesis (one iteration of silencing) to a monophonic single instrument dataset with
@@ -103,7 +108,7 @@ def chr_dataset(dataset_folder=os.path.join(os.path.expanduser("~"), "FluteEtude
         use_anal_paths = False
 
     paths_list = gen_paths(dataset_folder, modeln=model, suffix=name_suffix, pitch_shift=synthesize_pitch_shifted_versions,
-                           use_anal_paths=use_anal_paths)
+                           use_anal_paths=use_anal_paths, create_tfrecords=create_tfrecords)
     if ic:
         # Instrument model is used for the standard implementation, below is the code to create the
         # instrument timbre model
@@ -172,12 +177,29 @@ def chr_dataset(dataset_folder=os.path.join(os.path.expanduser("~"), "FluteEtude
         paths_dict, pitch_shift=synthesize_pitch_shifted_versions,
         instrument_detector=instrument_timbre_detector,
         th_lc=low_confidence_threshold, th_hc=high_confidence_threshold, voiced_th_ms=min_voiced_th_ms,
-        refine_twm=refine_estimates_with_twm, sawtooth_synth=use_sawtooth_timbre) for paths_dict in paths_list)
+        refine_twm=refine_estimates_with_twm, sawtooth_synth=use_sawtooth_timbre, create_tfrecords=create_tfrecords
+    ) for paths_dict in paths_list)
 
     time_grade = taymit() - time_grade
     print("It took {:.3f}".format(time_grade))
 
 
+def arg_parser():
+    parser = argparse.ArgumentParser('ConstrainedHarmonicResynthesizer', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--dataset-path', '-p',
+                        default=os.path.join(os.path.expanduser("~"), "musical-etudes", "clarinet-etudes"),
+                        help='single instrument  dataset path which contains the "original" folder')
+    parser.add_argument('--create-tfrecords', '-t', default=False,
+                        help='Create tfrecord files to directly finetune the CREPE')
+    parser.add_argument('--model', '-m', help='pitch estimation model for harmonic reconstruction', default="crepe")
+    parser.add_argument('--instrument-constraint', '-ic', help='whether to model the instrument constraints for single timbre dataset',
+                        default=False)
+    parser.add_argument('--pitch-shifts', '-ps', default='True',
+                        help='Whether to apply microtonal pitch shifts')
+    return vars(parser.parse_args())
+
+
 if __name__ == '__main__':
-    dataset_folder = "/run/user/1000/gvfs/sftp:host=hpc.s.upf.edu/homedtic/ntamer/musical-etudes/clarinet-etudes"
-    chr_dataset(dataset_folder, model="crepe", ic=False, synthesize_pitch_shifted_versions=True)
+    args = arg_parser()
+    chr_dataset(dataset_folder=args["dataset_path"], model=args["model"], ic=args["instrument_constraint"],
+                synthesize_pitch_shifted_versions=args["pitch_shifts"], create_tfrecords=args["create_tfrecords"])

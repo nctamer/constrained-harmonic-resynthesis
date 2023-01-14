@@ -6,6 +6,7 @@ import pandas as pd
 from time import time as taymit
 import soundfile as sf
 from tqdm import tqdm
+import random
 
 
 HOP_SIZE = 128

@@ -15,5 +15,5 @@ conda init bash
 conda activate supervised
 
 
-python synth.py
+python label_dataset.py -p "/homedtic/ntamer/musical-etudes/clarinet-etudes"
 
