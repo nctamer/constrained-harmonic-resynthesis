@@ -13,7 +13,7 @@ WINDOW_TYPE = 'blackmanharris'
 sms_tools_path = 'sms_tools'  # if you use git clone to this dir (e.g. in colab)
 # change according to the install location of https://github.com/MTG/sms-tools
 
-sys.path.append(os.path.join(sms_tools_path, './models/'))
+sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), sms_tools_path, './models/'))
 try:
     import sineModel as SM
     import harmonicModel as HM
