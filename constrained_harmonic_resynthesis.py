@@ -20,7 +20,10 @@ def analyze_file(paths, confidence_threshold=0.9, min_voiced_segment_ms=25):
     time_start = taymit()
     filename = ' '.join(paths['original'].split('/')[-3:])[:-4]
     audio = librosa.load(paths['original'], sr=SAMPLING_RATE, mono=True)[0]
-    f0s = pd.read_csv(paths['f0'])
+    try:
+        f0s = pd.read_csv(paths['f0'])
+    except KeyError:   #the convention might be different, try taking the second column:
+        f0s = pd.read_csv(paths[1])
     f0s, conf, time = resynthesis_utils.interpolate_f0_to_sr(f0s, audio)
     time_load = taymit()
     print("loading {:s} took {:.3f}".format(filename, time_load - time_start))
